@@ -16,11 +16,6 @@ import android.util.Log;
 import android.graphics.PointF;
 import android.net.Uri;
 
-import com.github.barteksc.pdfviewer.PDFView;
-import com.github.barteksc.pdfviewer.listener.OnPageChangeListener;
-import com.github.barteksc.pdfviewer.listener.OnLoadCompleteListener;
-import com.github.barteksc.pdfviewer.listener.OnErrorListener;
-
 import com.facebook.react.bridge.NativeModule;
 import com.facebook.react.bridge.ReactApplicationContext;
 import com.facebook.react.bridge.ReactContext;
@@ -37,17 +32,10 @@ import static java.lang.String.format;
 import java.lang.ClassCastException;
 
 
-public class RCTPdfManager extends SimpleViewManager<PDFView> implements OnPageChangeListener,OnLoadCompleteListener,OnErrorListener {
+public class RCTPdfManager extends SimpleViewManager<PdfView> {
     private static final String REACT_CLASS = "RCTPdf";
     private Context context;
-    private PDFView pdfView;
-    private int page = 1;               // start from 1
-    private boolean horizontal = false;
-    private float scale = 1;
-    private String asset;
-    private String path;
-    private int spacing = 10;
-    private String password = "";
+    private PdfView pdfView;
 
 
     public RCTPdfManager(ReactApplicationContext reactContext){
@@ -60,116 +48,61 @@ public class RCTPdfManager extends SimpleViewManager<PDFView> implements OnPageC
     }
 
     @Override
-    public PDFView createViewInstance(ThemedReactContext context) {
-        pdfView = new PDFView(context, null);
+    public PdfView createViewInstance(ThemedReactContext context) {
+        this.pdfView = new PdfView(context,null);
         return pdfView;
     }
 
     @Override
-    public void onPageChanged(int page, int pageCount) {
-        // pdf lib page start from 0, convert it to our page (start from 1)
-        page = page+1;
-        showLog(format("%s %s / %s", path, page, pageCount));
-
-        WritableMap event = Arguments.createMap();
-        event.putString("message", "pageChanged|"+page+"|"+pageCount);
-        ReactContext reactContext = (ReactContext)pdfView.getContext();
-        reactContext.getJSModule(RCTEventEmitter.class).receiveEvent(
-            pdfView.getId(),
-            "topChange",
-            event
-         );
-    }
-
-    @Override
-    public void loadComplete(int pageCount) {
-        WritableMap event = Arguments.createMap();
-        event.putString("message", "loadComplete|"+pageCount);
-        ReactContext reactContext = (ReactContext)pdfView.getContext();
-        reactContext.getJSModule(RCTEventEmitter.class).receiveEvent(
-            pdfView.getId(),
-            "topChange",
-            event
-         );
-    }
-
-    @Override
-    public void onError(Throwable t){
-        WritableMap event = Arguments.createMap();
-        if (t.getMessage().contains("Password required or incorrect password")) {
-            event.putString("message", "error|Password required or incorrect password.");
-        } else {
-            event.putString("message", "error|Load pdf failed.");
-        }
-
-        ReactContext reactContext = (ReactContext)pdfView.getContext();
-        reactContext.getJSModule(RCTEventEmitter.class).receiveEvent(
-            pdfView.getId(),
-            "topChange",
-            event
-         );
-    }
-
-    private void drawPdf() {
-        PointF pivot = new PointF(this.scale, this.scale);
-
-        if (this.path != null){
-            File pdfFile = new File(this.path);
-            pdfView.fromFile(pdfFile)
-                .defaultPage(this.page-1)
-                //.showMinimap(false)
-                //.enableSwipe(true)
-                .swipeHorizontal(this.horizontal)
-                .onPageChange(this)
-                .onLoad(this)
-                .onError(this)
-                .spacing(this.spacing)
-                .password(this.password)
-                .load();
-
-            pdfView.zoomCenteredTo(this.scale, pivot);
-            showLog(format("drawPdf path:%s %s", this.path, this.page));
-        }
+    public void onDropViewInstance(PdfView pdfView) {
+        pdfView = null;
     }
 
     @ReactProp(name = "path")
-    public void setPath(PDFView view, String path) {
-        this.path = path;
-        drawPdf();
+    public void setPath(PdfView pdfView, String path) {
+        pdfView.setPath(path);
     }
 
     // page start from 1
     @ReactProp(name = "page")
-    public void setPage(PDFView view, int page) {
-        this.page = page>1?page:1;
-        drawPdf();
+    public void setPage(PdfView pdfView, int page) {
+        pdfView.setPage(page);
     }
 
     @ReactProp(name = "scale")
-    public void setScale(PDFView view, float scale) {
-        this.scale = scale;
-        drawPdf();
+    public void setScale(PdfView pdfView, float scale) {
+        pdfView.setScale(scale);
     }
 
     @ReactProp(name = "horizontal")
-    public void setHorizontal(PDFView view, boolean horizontal) {
-        this.horizontal = horizontal;
-        drawPdf();
+    public void setHorizontal(PdfView pdfView, boolean horizontal) {
+        pdfView.setHorizontal(horizontal);
     }
 
     @ReactProp(name = "spacing")
-    public void setSpacing(PDFView view, int spacing) {
-        this.spacing = spacing;
-        drawPdf();
+    public void setSpacing(PdfView pdfView, int spacing) {
+        pdfView.setSpacing(spacing);
     }
 
     @ReactProp(name = "password")
-    public void setSpacing(PDFView view, String password) {
-        this.password = password;
-        drawPdf();
+    public void setPassword(PdfView pdfView, String password) {
+        pdfView.setPassword(password);
     }
 
-    private void showLog(final String str) {
-        Log.d(REACT_CLASS, str);
+    @ReactProp(name = "enableAntialiasing")
+    public void setEnableAntialiasing(PdfView pdfView, boolean enableAntialiasing) {
+        pdfView.setEnableAntialiasing(enableAntialiasing);
     }
+
+    @ReactProp(name = "fitWidth")
+    public void setFitWidth(PdfView pdfView, boolean fitWidth) {
+        pdfView.setFitWidth(fitWidth);
+    }
+
+    @Override
+    public void onAfterUpdateTransaction(PdfView pdfView) {
+        super.onAfterUpdateTransaction(pdfView);
+        pdfView.drawPdf();
+    }
+
 }

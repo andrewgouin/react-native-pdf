@@ -16,6 +16,7 @@ import {
   Platform,
   ProgressBarAndroid,
   ProgressViewIOS,
+  ViewPropTypes
 } from 'react-native'
 import RNFetchBlob from 'react-native-fetch-blob'
 const SHA1 = require('crypto-js/sha1')
@@ -112,13 +113,6 @@ export default class Pdf extends Component {
         let data = uri.replace(/data:application\/pdf;base64\,/i, '')
         RNFetchBlob.fs
           .writeFile(cacheFile, data, 'base64')
-          // listen to download progress event
-          .progress((received, total) => {
-            //__DEV__ && console.log('progress', received / total);
-            this.props.onLoadProgress &&
-              this.props.onLoadProgress(received / total)
-            this.setState({ progress: received / total })
-          })
           .then(() => {
             //__DEV__ && console.log("write base64 to file:" + cacheFile);
             this.setState({ path: cacheFile, isDownloaded: true })
@@ -188,7 +182,7 @@ export default class Pdf extends Component {
     if (message.length > 0) {
       if (message[0] == 'loadComplete') {
         this.props.onLoadComplete &&
-          this.props.onLoadComplete(Number(message[1]))
+          this.props.onLoadComplete(Number(message[1]), this.state.path)
       } else if (message[0] == 'pageChanged') {
         this.props.onPageChanged &&
           this.props.onPageChanged(Number(message[1]), Number(message[2]))
@@ -234,7 +228,7 @@ export default class Pdf extends Component {
 }
 
 Pdf.propTypes = {
-  ...View.propTypes,
+  ...ViewPropTypes,
   path: PropTypes.string,
   source: PropTypes.oneOfType([
     PropTypes.shape({
@@ -250,6 +244,8 @@ Pdf.propTypes = {
   spacing: PropTypes.number,
   password: PropTypes.string,
   activityIndicator: PropTypes.any,
+  enableAntialiasing: PropTypes.bool,
+  fitWidth: PropTypes.bool,
   onChange: PropTypes.func,
   onLoadComplete: PropTypes.func,
   onPageChanged: PropTypes.func,

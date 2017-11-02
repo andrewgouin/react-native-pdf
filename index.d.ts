@@ -1,6 +1,6 @@
 //
 //  react-native-pdf
-//  
+//
 //
 //  Created by Wonday on 17/4/21.
 //  Copyright (c) wonday.org All rights reserved.
@@ -18,9 +18,11 @@ interface Props {
   spacing?: number,
   password?: string,
   activityIndicator?: any,
+  enableAntialiasing?: boolean,
+  fitWidth?: boolean,
   onLoadComplete?: (pageCount: number) => void,
   onPageChanged?: (page: number, pageCount: number) => void,
-  onError?: ()=> void,
+  onError?: (error: string) => void,
 }
 
 declare class Pdf extends React.Component<Props, any> {}

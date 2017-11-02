@@ -32,17 +32,26 @@
 // output log both debug and release
 #define ALog( s, ... ) NSLog( @"<%p %@:(%d)> %@", self, [[NSString stringWithUTF8String:__FILE__] lastPathComponent], __LINE__, [NSString stringWithFormat:(s), ##__VA_ARGS__] )
 
-#define MIN_SCALE 1    //min scale
+#define SCREEN_BUFFER_NUM 7.0f
+#define DEFAULT_SPACING 10
+#define INVALID_TARGETCONTENTOFFSET -100000.0f
 
 @implementation WPdfView
 {
-
+    
     CGPDFDocumentRef _pdfDoc;
     int _numberOfPages;
-
-    int _isContiniousTap;
     
-    BOOL _isLoadCompleteNoticed;
+    CGRect _pdfPageRect;
+    CGSize _pageCanvasSize;
+    CGPoint _pageCanvasOffset;
+    int _lastPage;
+    CGFloat _pageOffset;
+    CGFloat _targetContentOffset;
+    
+    double _numberOfBufferPages;
+    BOOL _isScrollToUpOrLeft; // TRUE:Up/Left FALSE:Down/Right
+    BOOL _needFixPageOffset;
     
 }
 
@@ -52,21 +61,28 @@
     self = [super initWithFrame:frame];
     
     if (self) {
+        self.backgroundColor = UIColor.clearColor;
+        
         _page = 1;
-        _horizontal = FALSE;
-        _scale = 1.0f;
-        _spacing = 10;
+        _lastPage = -1;
+        _pageOffset = 0;
+        
+        _horizontal = NO;
+        _fitWidth = NO;
+        _spacing = DEFAULT_SPACING;
         _password = @"";
         
         _numberOfPages = 0;
+        _numberOfBufferPages = SCREEN_BUFFER_NUM;
         
-        _isContiniousTap = TRUE;
+        _pdfPageRect = CGRectZero;
+        _pageCanvasSize = CGSizeZero;
+        _pageCanvasOffset = CGPointZero;
+        _targetContentOffset = INVALID_TARGETCONTENTOFFSET;
         
-        self.backgroundColor = UIColor.clearColor;
-
-        [self bindPan];
-        [self bindPinch];
-        [self bindTap];
+        _isScrollToUpOrLeft = NO;
+        _needFixPageOffset = NO;
+        
     }
     
     return self;
@@ -76,9 +92,18 @@
 - (void)setPath:(NSString *)path
 {
     
-    if (![path isEqual:_path]) {
+    if (![path isEqualToString:_path]) {
+        
+        if (_pdfDoc != NULL) {
+            
+            CGPDFDocumentRelease(_pdfDoc);
+            _pdfDoc = NULL;
+            
+        }
         
         _path = [path copy];
+        _page = 1;
+        _pageOffset = 0;
         
         if (_path == nil || _path.length == 0) {
             
@@ -92,7 +117,14 @@
 - (void)setPassword:(NSString *)password
 {
     
-    if (![password isEqual:_password]) {
+    if (![password isEqualToString:_password]) {
+        
+        if (_pdfDoc != NULL) {
+            
+            CGPDFDocumentRelease(_pdfDoc);
+            _pdfDoc = NULL;
+            
+        }
         
         _password = [password copy];
         
@@ -108,30 +140,11 @@
 - (void)setPage:(int)page
 {
     
-    if (page != _page) {
+    if (page != _page+_pageOffset) {
         
-        NSLog(@"setPage %d -> %d", _page, page);
+        DLog(@"setPage %d -> %d", _page, page);
         _page = page;
-        [self setNeedsDisplay];
-        
-    }
-    
-}
-
-- (void)setScale:(float)scale
-{
-
-    scale = scale < MIN_SCALE ? MIN_SCALE : scale;
-    
-    if (scale != _scale) {
-        
-        NSLog(@"setScale %f -> %f", _scale, scale);
-
-        _scale = scale;
-        
-        self.transform = CGAffineTransformMakeScale(_scale, _scale);
-        
-        [self updateBounds];
+        _pageOffset = 0;
         
     }
     
@@ -142,11 +155,20 @@
     
     if (horizontal != _horizontal) {
         
-        NSLog(@"setHorizontal %d -> %d", _horizontal, horizontal);
-        
+        DLog(@"setHorizontal %d -> %d", _horizontal, horizontal);
         _horizontal = horizontal;
         
-        [self setNeedsDisplay];
+    }
+    
+}
+
+- (void)setFitWidth:(BOOL)fitWidth
+{
+    
+    if (fitWidth != _fitWidth) {
+        
+        DLog(@"setFitWidth %d -> %d", _fitWidth, fitWidth);
+        _fitWidth = fitWidth;
         
     }
     
@@ -157,20 +179,20 @@
     
     if (spacing != _spacing) {
         
-        NSLog(@"setSpacing %d -> %d", _spacing, spacing);
-        
+        DLog(@"setSpacing %d -> %d", _spacing, spacing);
         _spacing = spacing;
-        
-        [self setNeedsDisplay];
         
     }
     
 }
 
 - (void) loadPdf {
+    
+    // have loaded
+    if (_pdfDoc!=NULL) return;
+    
     if (_path != nil && _path.length != 0) {
-        if (_pdfDoc != NULL) CGPDFDocumentRelease(_pdfDoc);
-            
+        
         NSURL *pdfURL = [NSURL fileURLWithPath:_path];
         _pdfDoc = CGPDFDocumentCreateWithURL((__bridge CFURLRef) pdfURL);
         
@@ -178,35 +200,44 @@
             bool isUnlocked = CGPDFDocumentUnlockWithPassword(_pdfDoc, [_password UTF8String]);
             if (!isUnlocked) {
                 if(_onChange){
-                    ALog(@"error|Password required or incorrect password.");
                     
+                    ALog(@"error|Password required or incorrect password.");
                     _onChange(@{ @"message": @"error|Password required or incorrect password."});
-                    _isLoadCompleteNoticed = TRUE;
+                    _path = @"";
                     
                 }
                 return;
             }
-
+            
         }
         
         if (_pdfDoc == NULL) {
             if(_onChange){
-                ALog(@"error|load pdf failed.");
                 
-                _onChange(@{ @"message": @"error|Load pdf failed."});
-                _isLoadCompleteNoticed = TRUE;
+                ALog(@"error|load pdf failed. path=%s", _path.UTF8String);
+                _onChange(@{ @"message": [[NSString alloc] initWithString:[NSString stringWithFormat:@"error|Load pdf failed. path=%s",_path.UTF8String]]});
+                _path = @"";
                 
             }
             return;
         }
         
         _numberOfPages = (int)CGPDFDocumentGetNumberOfPages(_pdfDoc);
-
-        [self noticeLoadComplete];
-        [self setNeedsDisplay];
-
+        
+        CGPDFPageRef pdfPage = CGPDFDocumentGetPage(_pdfDoc, 1);
+        _pdfPageRect = CGPDFPageGetBoxRect(pdfPage, kCGPDFTrimBox);
+        
+        DLog(@"loadComplete,%d", _numberOfPages);
+        _onChange(@{ @"message": [[NSString alloc] initWithString:[NSString stringWithFormat:@"loadComplete|%d",_numberOfPages]]});
+        
     } else {
-        DLog(@"null path");
+        
+        ALog(@"error|load pdf failed. path=null");
+        
+        if(_onChange){
+            _onChange(@{ @"message": [[NSString alloc] initWithString:[NSString stringWithFormat:@"error|Load pdf failed. path=null"]]});
+        }
+        return;
     }
 }
 
@@ -215,128 +246,75 @@
 {
     
     if(_onChange){
-        static int lastPage = -1;
         
-        if (lastPage!=_page) {
         
-            DLog(@"pageChanged,%d,%d", _page, _numberOfPages);
+        if (_horizontal) {
+            _pageOffset = ((((UIScrollView *)self.superview).contentOffset.x+((UIScrollView *)self.superview).bounds.size.width/2)/((UIScrollView *)self.superview).zoomScale-((UIScrollView *)self.superview).bounds.size.width/2)/(_pageCanvasSize.width+_spacing);
+        } else {
+            _pageOffset = ((((UIScrollView *)self.superview).contentOffset.y+((UIScrollView *)self.superview).bounds.size.height/2)/((UIScrollView *)self.superview).zoomScale-((UIScrollView *)self.superview).bounds.size.height/2)/(_pageCanvasSize.height+_spacing);
+        }
         
-            _onChange(@{ @"message": [[NSString alloc] initWithString:[NSString stringWithFormat:@"pageChanged|%d|%d", _page, _numberOfPages]]});
-            _isLoadCompleteNoticed = TRUE;
-            lastPage = _page;
+        if (_pageOffset<0) _pageOffset = 0;
+        
+        if (floor(_pageOffset)+_page!=_lastPage) {
+            _lastPage = floor(_pageOffset)+_page;
+            _onChange(@{ @"message": [[NSString alloc] initWithString:[NSString stringWithFormat:@"pageChanged|%d|%d", _lastPage, _numberOfPages]]});
+            DLog(@"pageChanged,%d,%d", _lastPage, _numberOfPages);
         }
     }
     
 }
 
-- (void)noticeLoadComplete
+- (void)drawPage:(int) pageOffset
+                :(CGContextRef) context
 {
+    if (_page+pageOffset<1 || _page+pageOffset>_numberOfPages) return;
     
-    DLog(@"loadComplete,%d", _numberOfPages);
+    CGPDFPageRef pdfPage = CGPDFDocumentGetPage(_pdfDoc, _page+pageOffset);
     
-    _onChange(@{ @"message": [[NSString alloc] initWithString:[NSString stringWithFormat:@"loadComplete|%d",_numberOfPages]]});
-
+    if (pdfPage != NULL) {
+        
+        CGContextSaveGState(context);
+        CGRect pageBounds;
+        
+        if (_horizontal){
+            pageBounds = CGRectMake(pageOffset*(_pageCanvasSize.width + _spacing) + _pageCanvasOffset.x,
+                                    - _pageCanvasSize.height - _pageCanvasOffset.y,
+                                    _pageCanvasSize.width,
+                                    _pageCanvasSize.height);
+            
+        } else {
+            pageBounds = CGRectMake(_pageCanvasOffset.x,
+                                    -pageOffset*(_pageCanvasSize.height + _spacing) - _pageCanvasSize.height - _pageCanvasOffset.y,
+                                    _pageCanvasSize.width,
+                                    _pageCanvasSize.height);
+        }
+        
+        // Fill the background with white.
+        CGContextSetRGBFillColor(context, 1.0,1.0,1.0,1.0);
+        CGContextFillRect(context, pageBounds);
+        
+        CGAffineTransform pageTransform = CGPDFPageGetDrawingTransform(pdfPage, kCGPDFCropBox, pageBounds, 0, true);
+        CGContextConcatCTM(context, pageTransform);
+        
+        CGContextDrawPDFPage(context, pdfPage);
+        CGContextRestoreGState(context);
+    }
 }
 
 - (void)drawRect:(CGRect)rect
 {
     
+    CGContextRef context = UIGraphicsGetCurrentContext();
+    
     if (_pdfDoc != NULL) {
         
-        CGContextRef context = UIGraphicsGetCurrentContext();
         
-        // PDF page drawing expects a Lower-Left coordinate system, so we flip the coordinate system
-        // before we start drawing.
+        // PDF page drawing expects a Lower-Left coordinate system, so we flip the coordinate system before drawing.
         CGContextScaleCTM(context, 1.0, -1.0);
         
-        CGPDFPageRef pdfPage = CGPDFDocumentGetPage(_pdfDoc, _page);
+        for(int i=0; i<_numberOfBufferPages; i++) [self drawPage:i :context];
         
-        // draw current page
-        if (pdfPage != NULL) {
-            CGContextSaveGState(context);
-            
-            CGRect curPageBounds= CGRectMake(0, 0, self.superview.bounds.size.width, self.superview.bounds.size.height);
-            
-            // caculate offset
-            curPageBounds.origin.x += 0;
-            curPageBounds.origin.y -= self.superview.bounds.size.height;
-
-
-            // Fill the background with white.
-            CGContextSetRGBFillColor(context, 1.0,1.0,1.0,1.0);
-            CGContextFillRect(context, curPageBounds);
-            
-            CGAffineTransform pdfTransform = CGPDFPageGetDrawingTransform(pdfPage, kCGPDFCropBox, curPageBounds, 0, true);
-            CGContextConcatCTM(context, pdfTransform);
-            
-            CGContextDrawPDFPage(context, pdfPage);
-
-            
-            CGContextRestoreGState(context);
-            
-            // draw previous page
-            if (_page > 1) {
-                
-                CGPDFPageRef pdfPrePage = CGPDFDocumentGetPage(_pdfDoc, _page-1);
-                
-                if (pdfPrePage != NULL) {
-                    
-                    CGContextSaveGState(context);
-                    CGRect prePageBounds= curPageBounds;
-                    if (_horizontal){
-                        prePageBounds.origin.x -= self.superview.bounds.size.width + _spacing;
-                    } else {
-                        prePageBounds.origin.y += self.superview.bounds.size.height + _spacing;
-                    }
-                    
-                    // Fill the background with white.
-                    CGContextSetRGBFillColor(context, 1.0,1.0,1.0,1.0);
-                    CGContextFillRect(context, prePageBounds);
-                    
-                    CGAffineTransform prePageTransform = CGPDFPageGetDrawingTransform(pdfPrePage, kCGPDFCropBox, prePageBounds, 0, true);
-                    CGContextConcatCTM(context, prePageTransform);
-                    
-                    CGContextDrawPDFPage(context, pdfPrePage);
-                    
-
-                    
-                    CGContextRestoreGState(context);
-                }
-            }
-
-            // draw next page
-            if (_page < _numberOfPages) {
-                
-                CGPDFPageRef pdfNextPage = CGPDFDocumentGetPage(_pdfDoc, _page+1);
-                
-                if (pdfNextPage != NULL) {
-                    
-                    CGContextSaveGState(context);
-                    CGRect nextPageBounds= curPageBounds;
-                    if (_horizontal){
-                        
-                        nextPageBounds.origin.x += self.superview.bounds.size.width + _spacing;
-                        
-                    } else {
-                        
-                        nextPageBounds.origin.y -= self.superview.bounds.size.height + _spacing;
-                        
-                    }
-
-                    // Fill the background with white.
-                    CGContextSetRGBFillColor(context, 1.0,1.0,1.0,1.0);
-                    CGContextFillRect(context, nextPageBounds);
-                    
-                    CGAffineTransform nextTransform = CGPDFPageGetDrawingTransform(pdfNextPage, kCGPDFCropBox, nextPageBounds, 0, true);
-                    CGContextConcatCTM(context, nextTransform);
-                    
-                    CGContextDrawPDFPage(context, pdfNextPage);
-                    CGContextRestoreGState(context);
-                }
-            }
-
-        }
-
         [self noticePageChanged];
     }
     
@@ -345,359 +323,235 @@
 /**
  *  reset bounds with scale
  *
- *  
+ *
  */
 - (void)updateBounds
 {
-   
-    CGRect bounds = self.superview.bounds;
-    if (bounds.size.width == 0 || bounds.size.height == 0) return;
     
-    if (_horizontal == TRUE) {
-        
-        bounds.origin.x = - self.superview.bounds.size.width - _spacing;
-        bounds.size.width = self.superview.bounds.size.width*3 + _spacing*2;
-        bounds.size.height = self.superview.bounds.size.height;
+    CGRect bounds = self.superview.bounds;
+    if (bounds.size.width==0 || bounds.size.height==0 || _pdfPageRect.size.width==0 || _pdfPageRect.size.height==0) return;
+    bounds.origin.x = 0;
+    bounds.origin.y = 0;
+    
+    
+    // caculate page canvas size
+    _pageCanvasSize.width = self.superview.bounds.size.width;
+    _pageCanvasSize.height = self.superview.bounds.size.height;
+    
+    if (_fitWidth ) {
+        _pageCanvasSize.width = self.superview.bounds.size.width;
+        _pageCanvasSize.height = _pdfPageRect.size.height*_pageCanvasSize.width/_pdfPageRect.size.width;
         
     } else {
-        
-        bounds.origin.y = - self.superview.bounds.size.height - _spacing;
-        bounds.size.width = self.superview.bounds.size.width;
-        bounds.size.height = self.superview.bounds.size.height*3 + _spacing*2;
-        
+        if (_pageCanvasSize.height/_pageCanvasSize.width>_pdfPageRect.size.height/_pdfPageRect.size.width) {
+            _pageCanvasSize.width = self.superview.bounds.size.width;
+            _pageCanvasSize.height = ceil(_pdfPageRect.size.height*self.superview.bounds.size.width/_pdfPageRect.size.width);
+        } else {
+            _pageCanvasSize.width = ceil(_pdfPageRect.size.width*self.superview.bounds.size.height/_pdfPageRect.size.height);
+            _pageCanvasSize.height = self.superview.bounds.size.height;
+        }
     }
-
-    // we will set a 3-pages rect to frame and bounds
+    
+    
+    // caculate bounds size
+    if (_horizontal) {
+        _numberOfBufferPages = floor((SCREEN_BUFFER_NUM*self.superview.bounds.size.width+_spacing)/(_pageCanvasSize.width+_spacing));
+        _numberOfBufferPages = _numberOfBufferPages<_numberOfPages?_numberOfBufferPages:_numberOfPages;
+        bounds.size.width = _pageCanvasSize.width*_numberOfBufferPages + _spacing*(_numberOfBufferPages-1);
+        bounds.size.height = _pageCanvasSize.height;
+    } else {
+        _numberOfBufferPages = floor((SCREEN_BUFFER_NUM*self.superview.bounds.size.height+_spacing)/(_pageCanvasSize.height+_spacing));
+        _numberOfBufferPages = _numberOfBufferPages<_numberOfPages?_numberOfBufferPages:_numberOfPages;
+        bounds.size.width = _pageCanvasSize.width;
+        bounds.size.height = _pageCanvasSize.height*_numberOfBufferPages + _spacing*(_numberOfBufferPages-1);
+    }
+    
+    
+    // adjust page canvas offset when can be drawn in one screen
+    _pageCanvasOffset = CGPointZero;
+    if (bounds.size.width<self.superview.bounds.size.width) {
+        _pageCanvasOffset.x = (self.superview.bounds.size.width - bounds.size.width)/2;
+        bounds.size.width = self.superview.bounds.size.width;
+    }
+    
+    if (bounds.size.height<self.superview.bounds.size.height) {
+        _pageCanvasOffset.y = (self.superview.bounds.size.height - bounds.size.height)/2;
+        bounds.size.height = self.superview.bounds.size.height;
+    }
+    
+    
+    // save zoomScale
+    CGFloat zoomScale = ((UIScrollView *)self.superview).zoomScale;
+    ((UIScrollView *)self.superview).zoomScale = 1;
+    
     [self setFrame:bounds];
     [self setBounds:bounds];
-    [self setNeedsDisplay];
+    ((UIScrollView *)self.superview).contentSize = bounds.size;
     
+    // fix contentOffset for head/foot page
+    CGPoint contentOffset;
+    if (_horizontal) {
+        contentOffset.x = (_pageCanvasSize.width+_spacing)*_pageOffset;
+        contentOffset.y = 0;
+        if (_page + _numberOfBufferPages>_numberOfPages){
+            contentOffset.x += (_page + _numberOfBufferPages - _numberOfPages - 1)*(_pageCanvasSize.width+_spacing);
+            float maxContentOffsetX = ((UIScrollView*)self.superview).contentSize.width - self.superview.bounds.size.width;
+            contentOffset.x = contentOffset.x>maxContentOffsetX?maxContentOffsetX:contentOffset.x;
+            ((UIScrollView *)self.superview).contentOffset = contentOffset;
+            _page = _numberOfPages - _numberOfBufferPages + 1;
+        } else {
+            ((UIScrollView *)self.superview).contentOffset = contentOffset;
+            [self fixPageOffset];
+        }
+    } else {
+        contentOffset.x = 0;
+        contentOffset.y = (_pageCanvasSize.height+_spacing)*_pageOffset;
+        if (_page + _numberOfBufferPages>_numberOfPages){
+            contentOffset.y += (_page + _numberOfBufferPages - _numberOfPages - 1)*(_pageCanvasSize.height+_spacing);
+            float maxContentOffsetY = ((UIScrollView *)self.superview).contentSize.height - self.superview.bounds.size.height;
+            contentOffset.y = contentOffset.y>maxContentOffsetY?maxContentOffsetY:contentOffset.y;
+            ((UIScrollView *)self.superview).contentOffset = contentOffset;
+            _page = _numberOfPages - _numberOfBufferPages + 1;
+        } else {
+            ((UIScrollView *)self.superview).contentOffset = contentOffset;
+            [self fixPageOffset];
+        }
+    }
+    
+    // restore zoomScale
+    ((UIScrollView *)self.superview).zoomScale = zoomScale;
+    [self setNeedsDisplay];
 }
 
 // Clean up.
 - (void)dealloc
 {
-    if(_pdfDoc != NULL) CGPDFDocumentRelease(_pdfDoc);
+    if(_pdfDoc != NULL) {
+    	CGPDFDocumentRelease(_pdfDoc);
+    	_pdfDoc = NULL;
+    }
 }
 
-
-#pragma mark - GestureRecognize operation
-/**
- *  Pan
- *
- *  @param recognizer
- */
-- (void)handlePan:(UIPanGestureRecognizer *)recognizer
+- (void)fixPageOffset
 {
-   
-    _isContiniousTap = FALSE;
+    _needFixPageOffset = NO;
     
-    [recognizer.view.superview bringSubviewToFront:recognizer.view];
+    CGPoint contentOffset = ((UIScrollView *)self.superview).contentOffset;
     
-    CGPoint translation = [recognizer translationInView:self];
-//    NSLog(@"translation %f,%f", translation.x, translation.y);
-    
-    
-    CGPoint center = recognizer.view.center;
-    CGPoint finalCenter = center;
-    
-    finalCenter.x += translation.x;
-    finalCenter.y += translation.y;
-    
-    int pageHeight = self.superview.bounds.size.height*_scale;
-    int pageWidth = self.superview.bounds.size.width*_scale;
-    
-    
-    // end animation
-    while (_numberOfPages > 1
-           && recognizer.state == UIGestureRecognizerStateEnded) {
-        
-        CGPoint velocity = [recognizer velocityInView:self];
-
-        // if low velocity not start end animation, only do a drag/move
-        if (_horizontal==TRUE) {
-            
-            if (abs((int)velocity.x) < 200) {
-                break;
-            }
-            
-            if (_page==1 && velocity.x>0) break;
-            if (_page==_numberOfPages && velocity.x<0) break;
-            
-            if (_page<=3 && velocity.x>0) {
-                velocity.x = pageWidth;
-            }
-            
-            if (_numberOfPages-_page<=3 && velocity.x<0) {
-                velocity.x = -pageWidth;
-            }
-            
-        } else {
-            
-            if (abs((int)velocity.y) < 200) {
-                break;
-            }
-            
-            if (_page==1 && velocity.y>0) break;
-            if (_page==_numberOfPages && velocity.y<0) break;
-            
-            if (_page<=3 && velocity.y>0){
-                velocity.y = pageHeight;
-            }
-
-            if (_numberOfPages-_page<=3 && velocity.y<0) {
-                velocity.y = -pageHeight;
-            }
-            
+    if(_horizontal) {
+        while (!_isScrollToUpOrLeft && _page>1 && contentOffset.x < (_pageCanvasSize.width+_spacing)*floor(_numberOfBufferPages/2)*((UIScrollView *)self.superview).zoomScale) {
+            _page --;
+            contentOffset.x += (_pageCanvasSize.width+_spacing)*((UIScrollView *)self.superview).zoomScale;
         }
         
+        while (_isScrollToUpOrLeft && _page<_numberOfPages - _numberOfBufferPages + 1 && contentOffset.x > (_pageCanvasSize.width+_spacing)*floor(_numberOfBufferPages/2)*((UIScrollView *)self.superview).zoomScale) {
+            _page ++;
+            contentOffset.x -= (_pageCanvasSize.width+_spacing)*((UIScrollView *)self.superview).zoomScale;
+        }
+    } else {
         
-      
-        // set finalCenter to do an animation
-        if (_horizontal==TRUE) {
-            
-            if (velocity.x>0 && velocity.x>2*pageWidth) velocity.x = 2*pageWidth;
-            if (velocity.x<0 && velocity.x<-2*pageWidth) velocity.x = -2*pageWidth;
-            
-            finalCenter.x += velocity.x;
-            
-        } else {
-            
-            if (velocity.y>0 && velocity.y>2*pageHeight) velocity.y = 2*pageHeight;
-            if (velocity.y<0 && velocity.y<-2*pageHeight) velocity.y = -2*pageHeight;
-            
-            finalCenter.y += velocity.y;
-            
+        while (!_isScrollToUpOrLeft && _page>1 && contentOffset.y < (_pageCanvasSize.height+_spacing)*floor(_numberOfBufferPages/2)*((UIScrollView *)self.superview).zoomScale) {
+            _page --;
+            contentOffset.y += (_pageCanvasSize.height+_spacing)*((UIScrollView *)self.superview).zoomScale;
         }
         
-        
-        
-        //use animation to slip to end
-        [UIView animateWithDuration:1.5
-                              delay:0
-                            options:UIViewAnimationOptionCurveEaseOut
-                         animations:^{
-                             recognizer.view.center = finalCenter;
-                         }
-                         completion:^(BOOL finished){
-                             [self setNeedsDisplay];
-                         }];
-        // break while
-        break;
+        while (_isScrollToUpOrLeft && _page<_numberOfPages - _numberOfBufferPages + 1 && contentOffset.y > (_pageCanvasSize.height+_spacing)*floor(_numberOfBufferPages/2)*((UIScrollView *)self.superview).zoomScale) {
+            _page ++;
+            contentOffset.y -= (_pageCanvasSize.height+_spacing)*((UIScrollView *)self.superview).zoomScale;
+        }
     }
+    
+    ((UIScrollView *)self.superview).contentOffset = contentOffset;
+    ((UIScrollView *)self.superview).decelerationRate = UIScrollViewDecelerationRateNormal;
+    [self setNeedsDisplay];
+}
 
+- (void)scrollViewWillBeginDragging:(UIScrollView *)scrollView
+{
+    if (_needFixPageOffset) {
+        
+        [self fixPageOffset];
+        
+    }
+}
+
+- (void)scrollViewWillEndDragging:(CGPoint)velocity
+              targetContentOffset:(inout CGPoint *)targetContentOffset
+{
+    CGSize contentSize = ((UIScrollView *)self.superview).contentSize;
+    
     if (_horizontal) {
-        
-        while (finalCenter.x > self.bounds.size.width/2) {
-            finalCenter.x -= pageWidth;
-            _page --;
-        }
-        
-        while (finalCenter.x< pageWidth - self.bounds.size.width/2) {
-            finalCenter.x += pageWidth;
-            _page ++;
-        }
-        
-        _page = _page < 1 ? 1 : _page;
-        _page = _page > _numberOfPages ? _numberOfPages : _page;
-        
-        // control X for not moving out
-        if (_page == 1) {
+        if (velocity.x ==0) {
             
-            if (finalCenter.x > pageWidth/2) finalCenter.x = pageWidth/2;
+            _targetContentOffset = INVALID_TARGETCONTENTOFFSET;
+            [self fixPageOffset];
             
-        }
-        
-        
-        if (_page == _numberOfPages) {
+        }else if (velocity.x < 0) {
             
-            if (finalCenter.x < self.superview.bounds.size.width - pageWidth/2) finalCenter.x = self.superview.bounds.size.width - pageWidth/2;
+            _isScrollToUpOrLeft = NO;
+            _needFixPageOffset = YES;
+            
+            if (targetContentOffset->x <= 0 ) {
+                _targetContentOffset = targetContentOffset->x;
+            }
+            
+        } else {
+            
+            _isScrollToUpOrLeft = YES;
+            _needFixPageOffset = YES;
+            
+            if (targetContentOffset->x >= contentSize.width - self.superview.bounds.size.width && _page<_numberOfPages - _numberOfBufferPages + 1) {
+                _targetContentOffset = targetContentOffset->x;
+            }
             
         }
-        
-        // control Y for not moving out
-        if (finalCenter.y < (self.superview.bounds.size.height - pageHeight/2)){
-            
-            finalCenter.y = self.superview.bounds.size.height - pageHeight/2;
-            
-        }
-        
-        
-        if (finalCenter.y > pageHeight/2){
-            
-            finalCenter.y = pageHeight/2;
-            
-        }
-
-        
     } else {
-        
-        while (finalCenter.y > self.bounds.size.height/2) {
-            finalCenter.y -= pageHeight;
-            _page --;
-        }
-        
-        while (finalCenter.y< pageHeight - self.bounds.size.height/2) {
-            finalCenter.y += pageHeight;
-            _page ++;
-        }
-        
-        _page = _page < 1 ? 1 : _page;
-        _page = _page > _numberOfPages ? _numberOfPages : _page;
-        
-        // control Y for not moving out
-        if (_page == 1) {
+        if (velocity.y == 0) {
             
-            if (finalCenter.y > pageHeight/2) finalCenter.y = pageHeight/2;
+            _targetContentOffset = INVALID_TARGETCONTENTOFFSET;
+            [self fixPageOffset];
             
-        }
-
-        
-        if (_page == _numberOfPages) {
+        }else if (velocity.y < 0) {
             
-            if (finalCenter.y < self.superview.bounds.size.height - pageHeight/2) finalCenter.y = self.superview.bounds.size.height - pageHeight/2;
+            _isScrollToUpOrLeft = NO;
+            _needFixPageOffset = YES;
+            
+            if (targetContentOffset->y <= 0 ) {
+                _targetContentOffset = targetContentOffset->y;
+            }
+            
+        } else {
+            
+            _isScrollToUpOrLeft = YES;
+            _needFixPageOffset = YES;
+            
+            if (targetContentOffset->y >= contentSize.height - self.superview.bounds.size.height && _page<_numberOfPages - _numberOfBufferPages + 1) {
+                _targetContentOffset = targetContentOffset->y;
+            }
             
         }
-        
-        // control X for not moving out
-        if (finalCenter.x < (self.superview.bounds.size.width - pageWidth/2)){
-            
-            finalCenter.x = self.superview.bounds.size.width - pageWidth/2;
-            
-        }
-        
-        
-        if (finalCenter.x > pageWidth/2){
-            
-            finalCenter.x = pageWidth/2;
-            
-        }
-        
     }
-    
-    
-    // set center;
-    recognizer.view.center = finalCenter;
-    
-    
-    [recognizer setTranslation:CGPointZero inView:self];
-    
-    [self setNeedsDisplay];
     
 }
 
-/**
- *  Pinch
- *
- *  @param recognizer
- */
-- (void)handlePinch:(UIPinchGestureRecognizer *)recognizer
+- (void)scrollViewDidScroll:(UIScrollView *)scrollView
 {
-    
-    _isContiniousTap = FALSE;
-    
-    CGFloat scale = recognizer.scale;
-    
-    if (scale * _scale < MIN_SCALE) scale = MIN_SCALE / _scale;
-
-    int touchCount = (int)recognizer.numberOfTouches;
-    
-    if (touchCount == 2) {
-        
-        CGPoint p1 = [recognizer locationOfTouch: 0 inView:self ];
-        CGPoint p2 = [recognizer locationOfTouch: 1 inView:self ];
-        
-        CGPoint finalCenter = recognizer.view.center;
-        finalCenter.x = (p1.x+p2.x)/2;
-        finalCenter.y = (p1.y+p2.y)/2;
-        
-        _scale = scale * _scale;
-        
-        self.transform = CGAffineTransformMakeScale(_scale, _scale);
-        recognizer.view.center = finalCenter;
-    
-        [self setNeedsDisplay];
-        
-    }
-    
-    recognizer.scale = 1.0;
-    
-}
-
-/**
- *  Tap
- *  zoom reset or in
- *
- *  @param recognizer
- */
-- (void)handleTap:(UITapGestureRecognizer *)recognizer
-{
-
-    if (_isContiniousTap) {
-        
-        // one tap add scale 1.2 times
-        CGFloat scale = 1.2;
-
-        _scale = _scale * scale;
-        
-        self.transform = CGAffineTransformMakeScale(_scale, _scale);
-        
+    if (_horizontal) {
+        if (_targetContentOffset!=INVALID_TARGETCONTENTOFFSET && fabs(_targetContentOffset-((UIScrollView *)self.superview).contentOffset.x)<=100) {
+            ((UIScrollView *)self.superview).decelerationRate = UIScrollViewDecelerationRateFast;
+            _targetContentOffset = INVALID_TARGETCONTENTOFFSET;
+        }
     } else {
-        
-        _scale = 1.0;
-        _isContiniousTap = TRUE;
-        
-        self.transform = CGAffineTransformMakeScale(_scale, _scale);
-        
+        if (_targetContentOffset!=INVALID_TARGETCONTENTOFFSET && fabs(_targetContentOffset-((UIScrollView *)self.superview).contentOffset.y)<=100) {
+            ((UIScrollView *)self.superview).decelerationRate = UIScrollViewDecelerationRateFast;
+            _targetContentOffset = INVALID_TARGETCONTENTOFFSET;
+        }
     }
-    
-    [self setNeedsDisplay];
-    
+    [self noticePageChanged];
 }
 
-
-#pragma mark - bind recognizer
-/**
- *  Bind Pan
- *
- *
- */
-- (void)bindPan
+- (void)scrollViewDidEndDecelerating:(UIScrollView *)scrollView
 {
-    UIPanGestureRecognizer *recognizer = [[UIPanGestureRecognizer alloc] initWithTarget:self
-                                                                                 action:@selector(handlePan:)];
-    [self addGestureRecognizer:recognizer];
-    
+    [self fixPageOffset];
 }
-
-
-/**
- *  Bind pinch
- *
- *  
- */
-- (void)bindPinch {
-    UIPinchGestureRecognizer *recognizer = [[UIPinchGestureRecognizer alloc] initWithTarget:self
-                                                                                     action:@selector(handlePinch:)];
-    [self addGestureRecognizer:recognizer];
-    
-}
-
-/**
- *  Bind tap
- *
- *
- */
-- (void)bindTap
-{
-    UITapGestureRecognizer *recognizer = [[UITapGestureRecognizer alloc] initWithTarget:self
-                                                                                 action:@selector(handleTap:)];
-    //trigger by one finger and double touch
-    recognizer.numberOfTapsRequired = 2;
-    recognizer.numberOfTouchesRequired = 1;
-    
-    [self addGestureRecognizer:recognizer];
-    
-}
-
 @end

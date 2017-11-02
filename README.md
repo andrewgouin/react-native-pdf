@@ -12,56 +12,88 @@ A react native PDF view component (cross-platform support)
 * support password protected pdf
 
 ### Installation
+We use [`react-native-fetch-blob`](https://github.com/wkh237/react-native-fetch-blob#installation) to handle file system access in this package,
+So you should install react-native-pdf and react-native-fetch-blob
+
 ```bash
 npm install react-native-pdf --save
-
-react-native link react-native-pdf
-```
-We use [`react-native-fetch-blob`](https://github.com/wkh237/react-native-fetch-blob#installation) to handle file system access in this package and it requires an extra step during the installation. 
-_You should only have to do this once._
-```bash
 npm install react-native-fetch-blob --save
 
+react-native link react-native-pdf
 react-native link react-native-fetch-blob
 ```
-Or, if you want to add Android permissions to AndroidManifest.xml automatically, use this one:
 
-    RNFB_ANDROID_PERMISSIONS=true react-native link react-native-fetch-blob
+### FAQ
+
+Q1. After installation and running, I can not see the pdf file.
+A1: maybe you forgot to excute ```react-native link``` or it does not run correctly.
+You can add it manually. For detail you can see the issue [`#24`](https://github.com/wonday/react-native-pdf/issues/24) and [`#2`](https://github.com/wonday/react-native-pdf/issues/2)
+
+Q2. When running, it shows ```'Pdf' has no propType for native prop RCTPdf.acessibilityLabel of native type 'String'```
+A2. Your react-native version is too old, please upgrade it to 0.47.0+ see also [`#39`](https://github.com/wonday/react-native-pdf/issues/39)
 
 ### ChangeLog
 
-v1.2.7
+v2.0.3
 
-1. Improve scrolling animation iOS #25
-2. When password error, call onError iOS/Android #26
+1. Fix iOS load pdf problem [`#76`](https://github.com/wonday/react-native-pdf/issues/76)
 
-v1.2.5/v1.2.6
+v2.0.2
 
-1. Improve scrolling animation when at pdf head/end iOS #23
+1. Fix pdf canvas was clipped problem [`#69`](https://github.com/wonday/react-native-pdf/issues/69)
 
-v1.2.4
+v2.0.1
 
-1. Refactor pan gesture and fix pdf not show complete when scale on iOS #20
-2. Replace PropTypes with prop-types package #22
+1. Improve iOS version scrolling performance
+2. Fix never ending loop rendering problem in example code
 
-v1.2.3
+v2.0.0
 
-1. Comment out debug log
-2. Fix onLoadComplete not triggered on iOS #19
-3. Fix initial props scale not work problem on iOS
+1. Reimplement iOS version by UIScrollView, improve scrolling performance
+2. Fix iOS paging [`#63`](https://github.com/wonday/react-native-pdf/issues/63)
+
+v1.3.5
+
+1. Improve scolling performance
+2. Return pdf local/cache path when callback onLoadComplete [`#57`](https://github.com/wonday/react-native-pdf/issues/57)
+
+v1.3.4
+
+1. Update iOS project to Xcode9 format.
+2. Fix crash problem when load from base64 [`#58`](https://github.com/wonday/react-native-pdf/issues/58)
+3. Fix TypeScript definition for onError [`#53`](https://github.com/wonday/react-native-pdf/issues/53)
+4. Update sample code in readme
+
+v1.3.3
+
+1. Improve iOS scrolling performance, fix [`#47`](https://github.com/wonday/react-native-pdf/issues/47)
+
+v1.3.2
+
+1. Move react-native and react-native-fetch-blob to peerDependencies
+
+v1.3.1
+
+1. Refactor android source
+2. Stop page scrolling when tap screen [`#41`](https://github.com/wonday/react-native-pdf/issues/41)
+
+v1.3.0
+
+1. Fix drawing problem on Android 4.4 [`#31`](https://github.com/wonday/react-native-pdf/issues/31)
+2. Add fitWidth support [`#36`](https://github.com/wonday/react-native-pdf/issues/36) , [`#38`](https://github.com/wonday/react-native-pdf/issues/38)
 
 [[more]](https://github.com/wonday/react-native-pdf/releases)
 
 ### Example
 
 ```js
-//
-//  PDFExample.js
-// 
-//
-//  Created by Wonday on 17/4/21.
-//  Copyright (c) wonday.org All rights reserved.
-//
+/**
+ * Copyright (c) 2017-present, Wonday (@wonday.org)
+ * All rights reserved.
+ *
+ * This source code is licensed under the MIT-style license found in the
+ * LICENSE file in the root directory of this source tree.
+ */
 
 import React from 'react';
 import {
@@ -77,61 +109,24 @@ import Pdf from 'react-native-pdf';
 export default class PDFExample extends React.Component {
     constructor(props) {
         super(props);
-        this.state = {
-            page: 1,
-            pageCount: 1,
-        };
-        this.pdf = null;
     }
-
-    componentDidMount() {
-    }
-
-    prePage=()=>{
-        if (this.pdf){
-            let prePage = this.state.page>1?this.state.page-1:1;
-            this.pdf.setNativeProps({page: prePage});
-            this.setState({page:prePage});
-            console.log(`prePage: ${prePage}`);
-        }
-    }
-
-    nextPage=()=>{
-        if (this.pdf){
-            let nextPage = this.state.page+1>this.state.pageCount?this.state.pageCount:this.state.page+1;
-            this.pdf.setNativeProps({page: nextPage});
-            this.setState({page:nextPage});
-            console.log(`nextPage: ${nextPage}`);
-        }
-
-    }
-
+        
     render() {
-        let source = {uri:'https://www.irs.gov/pub/irs-pdf/fw2.pdf',cache:true};
+        let source = {uri:'http://samples.leanpub.com/thereactnativebook-sample.pdf',cache:true};
+        //let source = require('./test.pdf');  // ios only
         //let source = {uri:'bundle-assets://test.pdf'};
-        //let source = require('./test.pdf'); //ios only
-        //let source = {uri:"data:application/pdf;base64, ..."}; // this is a dummy
+
+        //let source = {uri:'file:///sdcard/test.pdf'};
+        //let source = {uri:"data:application/pdf;base64,..."};
 
         return (
             <View style={styles.container}>
-                <View style={{flexDirection:'row'}}>
-                    <TouchableHighlight  disabled={this.state.page==1} style={this.state.page==1?styles.btnDisable:styles.btn} onPress={()=>this.prePage()}>
-                        <Text style={styles.btnText}>{'Previous'}</Text>
-                    </TouchableHighlight>
-                    <TouchableHighlight  disabled={this.state.page==this.state.pageCount} style={this.state.page==this.state.pageCount?styles.btnDisable:styles.btn}  onPress={()=>this.nextPage()}>
-                        <Text style={styles.btnText}>{'Next'}</Text>
-                    </TouchableHighlight>
-                </View>
-                <Pdf ref={(pdf)=>{this.pdf = pdf;}}
+                <Pdf
                     source={source}
-                    page={1}
-                    horizontal={false}
                     onLoadComplete={(pageCount)=>{
-                        this.setState({pageCount: pageCount});
                         console.log(`total page count: ${pageCount}`);
                     }}
                     onPageChanged={(page,pageCount)=>{
-                        this.setState({page:page});
                         console.log(`current page: ${page}`);
                     }}
                     onError={(error)=>{
@@ -150,24 +145,12 @@ const styles = StyleSheet.create({
         alignItems: 'center',
         marginTop: 25,
     },
-    btn: {
-        margin: 5,
-        padding:5,
-        backgroundColor: "blue",
-    },
-    btnDisable: {
-        margin: 5,
-        padding:5,
-        backgroundColor: "gray",
-    },
-    btnText: {
-        color: "#FFF",
-    },
     pdf: {
         flex:1,
         width:Dimensions.get('window').width,
     }
 });
+
 ```
 
 
@@ -176,15 +159,17 @@ const styles = StyleSheet.create({
 | Property      | Type          | Default          | Description         | iOS   | Android |
 | ------------- |:-------------:|:----------------:| ------------------- | ------| ------- |
 | source        | object        | not null         | PDF source like {uri:xxx, cache:false}. see the following for detail.| ✔   | ✔ |
-| page          | number        | 1                | page index          | ✔   | ✔ |
-| scale         | number        | 1.0              | zoom scale, scale>=1| ✔   | ✔ |
-| horizontal    | bool          | false            | draw page direction | ✔   | ✔ |
-| spacing       | number        | 10               | draw page breaker   | ✔   | ✔ |
+| page          | number        | 1                | initial page index          | ✔   | ✔ |
+| scale         | number        | 1.0              | zoom scale, 1<=scale<=3| ✔   | ✔ |
+| horizontal    | bool          | false            | draw page direction, if you want to listen the orientation change, you can use  [[react-native-orientation-locker]](https://github.com/wonday/react-native-orientation-locker)| ✔   | ✔ |
+| fitWidth      | bool          | false            | if true fit the width of view, can not use fitWidth=true together with scale| ✔   | ✔ |
+| spacing       | number        | 10               | the breaker size between pages| ✔   | ✔ |
 | password      | string        | ""               | pdf password, if password error, will call OnError() with message "Password required or incorrect password."        | ✔   | ✔ |
 | style         | object        | {backgroundColor:"#eee"} | support normal view style, you can use this to set border/spacing color... | ✔   | ✔ |
-| activityIndicator   | Component       | ProgressBar | when loading show it as an indicator  | ✔   | ✔ |
+| activityIndicator   | Component       | <ProgressBar/> | when loading show it as an indicator, you can use your component| ✔   | ✔ |
+| enableAntialiasing  | bool            | true        | improve rendering a little bit on low-res screens, but maybe course some problem on Android 4.4, so add a switch  | ✖   | ✔ |
 | onLoadProgress      | function        | null        | callback when loading, return loading progress (0-1) | ✔   | ✔ |
-| onLoadComplete      | function        | null        | callback when pdf load completed, return total page count | ✔   | ✔ |
+| onLoadComplete      | function        | null        | callback when pdf load completed, return total page count and pdf local/cache path | ✔   | ✔ |
 | onPageChanged       | function        | null        | callback when page changed ,return current page and total page count | ✔   | ✔ |
 | onError       | function        | null        | callback when error happened | ✔   | ✔ |
 
@@ -193,7 +178,7 @@ const styles = StyleSheet.create({
 | parameter    | Description | default | iOS | Android |
 | ------------ | ----------- | ------- | --- | ------- |
 | uri          | pdf source, see the forllowing for detail.| required | ✔   | ✔ |
-| cached       | use cache or not | false | ✔ | ✔ |
+| cache        | use cache or not | false | ✔ | ✔ |
 | method       | request method when uri is a url | "GET" | ✔ | ✔ |
 | headers      | request headers when uri is a url | {} | ✔ | ✔ |
 
